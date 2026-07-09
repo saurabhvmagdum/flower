@@ -84,16 +84,6 @@ def share_keys_plaintext_separate(plaintext: bytes) -> tuple[int, int, bytes, by
     return ret
 
 
-def _prf_stream(seed: bytes) -> Iterator[int]:
-    """Deterministic byte stream from seed using SHA-256 counter mode."""
-    counter = 0
-    while True:
-        # Pack counter as 8-byte little-endian unsigned integer
-        h = hashlib.sha256(seed + struct.pack("<Q", counter))
-        yield from h.digest()
-        counter += 1
-
-
 def pseudo_rand_gen(
     seed: bytes, num_range: int, dimensions_list: list[tuple[int, ...]]
 ) -> list[NDArrayInt]:
@@ -106,26 +96,48 @@ def pseudo_rand_gen(
     if (num_range & (num_range - 1)) != 0 or num_range <= 0:
         raise ValueError("num_range must be a power of two.")
 
-    stream = _prf_stream(seed)
     num_bytes = (num_range.bit_length() + 6) // 8
     bitmask = num_range - 1
     
+    total_elements = sum(int(np.prod(shape)) for shape in dimensions_list)
+    total_bytes = total_elements * num_bytes
+    
+    counter = 0
+    buffer = bytearray()
+    while len(buffer) < total_bytes:
+        h = hashlib.sha256(seed + struct.pack("<Q", counter))
+        buffer.extend(h.digest())
+        counter += 1
+        
+    buffer = buffer[:total_bytes]
+    
+    if num_bytes == 1:
+        flat_vals = np.frombuffer(buffer, dtype=np.uint8).astype(np.int64)
+    elif num_bytes == 2:
+        flat_vals = np.frombuffer(buffer, dtype=">u2").astype(np.int64)
+    elif num_bytes == 4:
+        flat_vals = np.frombuffer(buffer, dtype=">u4").astype(np.int64)
+    elif num_bytes == 8:
+        flat_vals = np.frombuffer(buffer, dtype=">u8")
+        flat_vals = (flat_vals & bitmask).astype(np.int64)
+    else:
+        raw_bytes = np.frombuffer(buffer, dtype=np.uint8).reshape(-1, num_bytes)
+        flat_vals = np.zeros(total_elements, dtype=np.int64)
+        for i in range(num_bytes):
+            flat_vals = (flat_vals << 8) | raw_bytes[:, i]
+            
+    if num_bytes != 8:
+        flat_vals = flat_vals & bitmask
+        
     masks = []
+    start = 0
     for shape in dimensions_list:
         if len(shape) == 0:
-            # Handle scalar case
-            chunk = 0
-            for _ in range(num_bytes):
-                chunk = (chunk << 8) | next(stream)
-            val = chunk & bitmask
-            masks.append(np.array(val, dtype=np.int64))
+            masks.append(np.array(flat_vals[start], dtype=np.int64))
+            start += 1
         else:
-            total_elements = int(np.prod(shape))
-            vals = []
-            for _ in range(total_elements):
-                chunk = 0
-                for _ in range(num_bytes):
-                    chunk = (chunk << 8) | next(stream)
-                vals.append(chunk & bitmask)
-            masks.append(np.array(vals, dtype=np.int64).reshape(shape))
+            size = int(np.prod(shape))
+            masks.append(flat_vals[start : start + size].reshape(shape))
+            start += size
+            
     return masks
