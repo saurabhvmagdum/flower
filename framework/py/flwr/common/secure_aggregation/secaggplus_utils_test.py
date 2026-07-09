@@ -23,7 +23,7 @@ from .secaggplus_utils import pseudo_rand_gen
 
 def test_pseudo_rand_gen_determinism() -> None:
     """Test that identical seeds produce identical masks."""
-    seed = b"full_entropy_seed_32bytes!!_____"
+    seed = b"0123456789abcdef0123456789abcdef"
     dims = [(10,)]
     m1 = pseudo_rand_gen(seed, 2**32, dims)
     m2 = pseudo_rand_gen(seed, 2**32, dims)

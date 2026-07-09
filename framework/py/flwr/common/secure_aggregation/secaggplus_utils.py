@@ -18,7 +18,6 @@
 import hashlib
 import hmac
 import struct
-from collections.abc import Iterator
 
 import numpy as np
 
@@ -90,56 +89,52 @@ def pseudo_rand_gen(
 ) -> list[NDArrayInt]:
     """Seeded pseudo-random number generator for noise generation.
 
-    Uses SHA-256 in counter mode to generate a cryptographically strong,
+    Uses HMAC-SHA256 in counter mode to generate a cryptographically strong,
     deterministic byte stream from the seed, preserving full entropy.
 
-    Assumes `num_range` is a power of two.
+    Assumes `num_range` is a power of two and >= 2.
     """
-    if (num_range & (num_range - 1)) != 0 or num_range <= 0:
-        raise ValueError("num_range must be a power of two.")
+    if num_range < 2 or (num_range & (num_range - 1)) != 0:
+        raise ValueError("num_range must be a power of two and >= 2.")
 
     num_bytes = (num_range.bit_length() + 6) // 8
     bitmask = num_range - 1
-    
-    total_elements = sum(int(np.prod(shape)) for shape in dimensions_list)
-    total_bytes = total_elements * num_bytes
-    
+
     counter = 0
-    buffer = bytearray()
-    while len(buffer) < total_bytes:
-        h = hmac.new(seed, struct.pack("<Q", counter), hashlib.sha256)
-        buffer.extend(h.digest())
-        counter += 1
-        
-    buffer = buffer[:total_bytes]
-    
-    if num_bytes == 1:
-        flat_vals = np.frombuffer(buffer, dtype=np.uint8).astype(np.int64)
-    elif num_bytes == 2:
-        flat_vals = np.frombuffer(buffer, dtype=">u2").astype(np.int64)
-    elif num_bytes == 4:
-        flat_vals = np.frombuffer(buffer, dtype=">u4").astype(np.int64)
-    elif num_bytes == 8:
-        flat_vals = np.frombuffer(buffer, dtype=">u8")
-        flat_vals = (flat_vals & bitmask).astype(np.int64)
-    else:
-        raw_bytes = np.frombuffer(buffer, dtype=np.uint8).reshape(-1, num_bytes)
-        flat_vals = np.zeros(total_elements, dtype=np.int64)
-        for i in range(num_bytes):
-            flat_vals = (flat_vals << 8) | raw_bytes[:, i]
-            
-    if num_bytes != 8:
-        flat_vals = flat_vals & bitmask
-        
     masks = []
-    start = 0
+
     for shape in dimensions_list:
-        if len(shape) == 0:
-            masks.append(np.array(flat_vals[start], dtype=np.int64))
-            start += 1
+        total_elements = int(np.prod(shape)) if shape else 1
+        tensor_bytes = total_elements * num_bytes
+
+        buffer = bytearray()
+        while len(buffer) < tensor_bytes:
+            h = hmac.new(seed, struct.pack("<Q", counter), hashlib.sha256)
+            buffer.extend(h.digest())
+            counter += 1
+        buffer = buffer[:tensor_bytes]
+
+        if num_bytes == 1:
+            flat_vals = np.frombuffer(buffer, dtype=np.uint8).astype(np.int64)
+        elif num_bytes == 2:
+            flat_vals = np.frombuffer(buffer, dtype=">u2").astype(np.int64)
+        elif num_bytes == 4:
+            flat_vals = np.frombuffer(buffer, dtype=">u4").astype(np.int64)
+        elif num_bytes == 8:
+            flat_vals = np.frombuffer(buffer, dtype=">u8")
+            flat_vals = (flat_vals & bitmask).astype(np.int64)
         else:
-            size = int(np.prod(shape))
-            masks.append(flat_vals[start : start + size].reshape(shape))
-            start += size
-            
+            raw_bytes = np.frombuffer(buffer, dtype=np.uint8).reshape(-1, num_bytes)
+            flat_vals = np.zeros(total_elements, dtype=np.int64)
+            for i in range(num_bytes):
+                flat_vals = (flat_vals << 8) | raw_bytes[:, i]
+
+        if num_bytes != 8:
+            flat_vals = flat_vals & bitmask
+
+        if not shape:
+            masks.append(np.array(flat_vals[0], dtype=np.int64))
+        else:
+            masks.append(flat_vals.reshape(shape))
+
     return masks
