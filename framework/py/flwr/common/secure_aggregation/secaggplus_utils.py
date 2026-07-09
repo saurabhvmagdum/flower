@@ -96,35 +96,39 @@ def pseudo_rand_gen(
     """
     if num_range < 2 or (num_range & (num_range - 1)) != 0:
         raise ValueError("num_range must be a power of two and >= 2.")
+    if num_range > (1 << 63):
+        raise ValueError("num_range must be <= 2**63 to fit into int64 masks.")
 
     num_bytes = (num_range.bit_length() + 6) // 8
     bitmask = num_range - 1
 
     counter = 0
+    stream_buffer = bytearray()
     masks = []
 
     for shape in dimensions_list:
         total_elements = int(np.prod(shape)) if shape else 1
         tensor_bytes = total_elements * num_bytes
 
-        buffer = bytearray()
-        while len(buffer) < tensor_bytes:
+        while len(stream_buffer) < tensor_bytes:
             h = hmac.new(seed, struct.pack("<Q", counter), hashlib.sha256)
-            buffer.extend(h.digest())
+            stream_buffer.extend(h.digest())
             counter += 1
-        buffer = buffer[:tensor_bytes]
+
+        tensor_buffer = stream_buffer[:tensor_bytes]
+        stream_buffer = stream_buffer[tensor_bytes:]
 
         if num_bytes == 1:
-            flat_vals = np.frombuffer(buffer, dtype=np.uint8).astype(np.int64)
+            flat_vals = np.frombuffer(tensor_buffer, dtype=np.uint8).astype(np.int64)
         elif num_bytes == 2:
-            flat_vals = np.frombuffer(buffer, dtype=">u2").astype(np.int64)
+            flat_vals = np.frombuffer(tensor_buffer, dtype=">u2").astype(np.int64)
         elif num_bytes == 4:
-            flat_vals = np.frombuffer(buffer, dtype=">u4").astype(np.int64)
+            flat_vals = np.frombuffer(tensor_buffer, dtype=">u4").astype(np.int64)
         elif num_bytes == 8:
-            flat_vals = np.frombuffer(buffer, dtype=">u8")
+            flat_vals = np.frombuffer(tensor_buffer, dtype=">u8")
             flat_vals = (flat_vals & bitmask).astype(np.int64)
         else:
-            raw_bytes = np.frombuffer(buffer, dtype=np.uint8).reshape(-1, num_bytes)
+            raw_bytes = np.frombuffer(tensor_buffer, dtype=np.uint8).reshape(-1, num_bytes)
             flat_vals = np.zeros(total_elements, dtype=np.int64)
             for i in range(num_bytes):
                 flat_vals = (flat_vals << 8) | raw_bytes[:, i]
