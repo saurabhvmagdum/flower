@@ -15,6 +15,10 @@
 """Utility functions for the SecAgg/SecAgg+ protocol."""
 
 
+import hashlib
+import struct
+from collections.abc import Iterator
+
 import numpy as np
 
 from flwr.common import NDArrayInt
@@ -80,21 +84,48 @@ def share_keys_plaintext_separate(plaintext: bytes) -> tuple[int, int, bytes, by
     return ret
 
 
+def _prf_stream(seed: bytes) -> Iterator[int]:
+    """Deterministic byte stream from seed using SHA-256 counter mode."""
+    counter = 0
+    while True:
+        # Pack counter as 8-byte little-endian unsigned integer
+        h = hashlib.sha256(seed + struct.pack("<Q", counter))
+        yield from h.digest()
+        counter += 1
+
+
 def pseudo_rand_gen(
     seed: bytes, num_range: int, dimensions_list: list[tuple[int, ...]]
 ) -> list[NDArrayInt]:
-    """Seeded pseudo-random number generator for noise generation with Numpy."""
-    assert len(seed) & 0x3 == 0
-    seed32 = 0
-    for i in range(0, len(seed), 4):
-        seed32 ^= int.from_bytes(seed[i : i + 4], "little")
-    # pylint: disable-next=no-member
-    gen = np.random.RandomState(seed32)
-    output = []
-    for dimension in dimensions_list:
-        if len(dimension) == 0:
-            arr = np.array(gen.randint(0, num_range - 1), dtype=np.int64)
+    """Seeded pseudo-random number generator for noise generation.
+    
+    Uses SHA-256 in counter mode to generate a cryptographically secure, 
+    deterministic byte stream from the seed, preserving full entropy.
+    Assumes `num_range` is a power of two.
+    """
+    if (num_range & (num_range - 1)) != 0 or num_range <= 0:
+        raise ValueError("num_range must be a power of two.")
+
+    stream = _prf_stream(seed)
+    num_bytes = (num_range.bit_length() + 6) // 8
+    bitmask = num_range - 1
+    
+    masks = []
+    for shape in dimensions_list:
+        if len(shape) == 0:
+            # Handle scalar case
+            chunk = 0
+            for _ in range(num_bytes):
+                chunk = (chunk << 8) | next(stream)
+            val = chunk & bitmask
+            masks.append(np.array(val, dtype=np.int64))
         else:
-            arr = gen.randint(0, num_range - 1, dimension, dtype=np.int64)
-        output.append(arr)
-    return output
+            total_elements = int(np.prod(shape))
+            vals = []
+            for _ in range(total_elements):
+                chunk = 0
+                for _ in range(num_bytes):
+                    chunk = (chunk << 8) | next(stream)
+                vals.append(chunk & bitmask)
+            masks.append(np.array(vals, dtype=np.int64).reshape(shape))
+    return masks
