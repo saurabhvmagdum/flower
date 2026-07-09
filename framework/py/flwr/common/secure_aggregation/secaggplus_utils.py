@@ -16,6 +16,7 @@
 
 
 import hashlib
+import hmac
 import struct
 from collections.abc import Iterator
 
@@ -88,9 +89,10 @@ def pseudo_rand_gen(
     seed: bytes, num_range: int, dimensions_list: list[tuple[int, ...]]
 ) -> list[NDArrayInt]:
     """Seeded pseudo-random number generator for noise generation.
-    
-    Uses SHA-256 in counter mode to generate a cryptographically secure, 
+
+    Uses SHA-256 in counter mode to generate a cryptographically strong,
     deterministic byte stream from the seed, preserving full entropy.
+
     Assumes `num_range` is a power of two.
     """
     if (num_range & (num_range - 1)) != 0 or num_range <= 0:
@@ -105,7 +107,7 @@ def pseudo_rand_gen(
     counter = 0
     buffer = bytearray()
     while len(buffer) < total_bytes:
-        h = hashlib.sha256(seed + struct.pack("<Q", counter))
+        h = hmac.new(seed, struct.pack("<Q", counter), hashlib.sha256)
         buffer.extend(h.digest())
         counter += 1
         

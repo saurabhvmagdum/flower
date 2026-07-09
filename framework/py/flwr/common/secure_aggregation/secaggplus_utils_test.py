@@ -12,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""SecAgg+ utils tests."""
+"""SecAgg+ pseudo-random generator tests."""
 
 
 import numpy as np
 import pytest
 
-from flwr.common.secure_aggregation.secaggplus_utils import pseudo_rand_gen
+from .secaggplus_utils import pseudo_rand_gen
 
 
 def test_pseudo_rand_gen_determinism() -> None:
     """Test that identical seeds produce identical masks."""
-    seed = b"full_entropy_seed_32bytes!!"
+    seed = b"full_entropy_seed_32bytes!!_____"
     dims = [(10,)]
     m1 = pseudo_rand_gen(seed, 2**32, dims)
     m2 = pseudo_rand_gen(seed, 2**32, dims)
