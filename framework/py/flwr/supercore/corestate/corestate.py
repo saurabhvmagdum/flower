@@ -30,6 +30,7 @@ from flwr.proto.task_pb2 import Task, TaskEvent, TaskUsage  # pylint: disable=E0
 from flwr.supercore.fab import Fab
 from flwr.supercore.typing import ConnectorOAuthSessionRecord, ConnectorRecord
 
+from ..constant import AutomationStatus
 from ..object_store import ObjectStore
 
 
@@ -46,10 +47,62 @@ class CoreState(ABC):  # pylint: disable=R0904
         """Start a run-scoped object push session."""
 
     @abstractmethod
+    def delete_sessions_in_run(self, run_id: int) -> None:
+        """Delete bookkeeping for all object push sessions in a run.
+
+        This does not delete any messages or objects associated with the sessions.
+        """
+
+    @abstractmethod
     def preregister_object_tree(
         self, object_tree: ObjectTree, session_id: str
     ) -> list[str]:
         """Preregister the object tree for the object push session."""
+
+    @abstractmethod
+    def store_object(
+        self,
+        run_id: int,
+        session_id: str,
+        object_id: str,
+        object_content: bytes,
+    ) -> bool:
+        """Store an object if it is pending for an active push session.
+
+        Parameters
+        ----------
+        run_id : int
+            The ID of the run with which the push session is associated.
+        session_id : str
+            The ID of the object push session.
+        object_id : str
+            The ID of the object to store.
+        object_content : bytes
+            The object content to store.
+
+        Returns
+        -------
+        bool
+            True if the object was stored, otherwise False.
+        """
+
+    @abstractmethod
+    def get_object(self, run_id: int, object_id: str) -> bytes | None:
+        """Get an object and clean up expired push sessions when needed.
+
+        Parameters
+        ----------
+        run_id : int
+            The ID of the run requesting the object.
+        object_id : str
+            The ID of the object to retrieve.
+
+        Returns
+        -------
+        bytes | None
+            The object content, `b""` if it is known but unavailable, or None if it
+            is unknown.
+        """
 
     @abstractmethod
     def _cleanup_push_session(self, session_id: str, *, cleanup_messages: bool) -> None:
@@ -130,6 +183,16 @@ class CoreState(ABC):  # pylint: disable=R0904
         """
 
     @abstractmethod
+    def bind_connectors_to_run(
+        self, run_id: int, connector_refs: Sequence[str]
+    ) -> bool:
+        """Associate connector references with a run."""
+
+    @abstractmethod
+    def get_run_connector_refs(self, run_id: int) -> Sequence[str]:
+        """Return connector references associated with a run."""
+
+    @abstractmethod
     def create_connector_oauth_session(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         oauth_session_id: str,
@@ -207,7 +270,7 @@ class CoreState(ABC):  # pylint: disable=R0904
 
     @abstractmethod
     def store_message_and_object_tree(
-        self, message: Message, object_tree: ObjectTree
+        self, message: Message, object_tree: ObjectTree, session_id: str
     ) -> tuple[bool, list[str]]:
         """Store a Message and preregister its ObjectTree.
 
@@ -217,6 +280,8 @@ class CoreState(ABC):  # pylint: disable=R0904
             The Message to store.
         object_tree : ObjectTree
             The ObjectTree containing the IDs of objects to preregister.
+        session_id : str
+            The ID of the object push session.
 
         Returns
         -------
@@ -292,6 +357,7 @@ class CoreState(ABC):  # pylint: disable=R0904
         run_id: int,
         federation_id: str,
         series_id: int | None,
+        description: str | None = None,
     ) -> int | None:
         """Store a run in a run series and return the series ID.
 
@@ -305,6 +371,10 @@ class CoreState(ABC):  # pylint: disable=R0904
             Caller-provided series ID. If `None`, a new series ID is generated
             and creation is attempted. If set, the matching series must already
             exist and belong to `federation_id`.
+        description : str | None (default: None)
+            Optional description for a newly created run series. Ignored when
+            `series_id` refers to an existing run series. `None` means no
+            description was provided; an empty string is an explicit description.
 
         Returns
         -------
@@ -417,6 +487,57 @@ class CoreState(ABC):  # pylint: disable=R0904
         -------
         bool
             True if an active automation was stopped, otherwise False.
+        """
+
+    @abstractmethod
+    def advance_automation(
+        self,
+        automation_id: int,
+        *,
+        previous_next_run_at: str,
+        next_run_at: str | None,
+    ) -> bool:
+        """Advance an active automation occurrence.
+
+        Parameters
+        ----------
+        automation_id : int
+            Automation ID to advance.
+        previous_next_run_at : str
+            Previously observed due time timestamp string. The update only
+            succeeds if the stored `next_run_at` still matches this value, preventing
+            multiple workers from executing the same scheduled run concurrently.
+        next_run_at : str | None
+            Next due time timestamp string. If `None`, the current occurrence is
+            treated as the last finite occurrence and no next due time is stored.
+
+        Returns
+        -------
+        bool
+            True if the active automation occurrence was advanced, otherwise
+            False.
+        """
+
+    @abstractmethod
+    def finish_automation(
+        self,
+        automation_id: int,
+        *,
+        status: Literal[AutomationStatus.COMPLETED, AutomationStatus.FAILED],
+    ) -> bool:
+        """Finish an active automation with a terminal status.
+
+        Parameters
+        ----------
+        automation_id : int
+            Automation ID to finish.
+        status : AutomationStatus
+            Terminal target status. Must be `completed` or `failed`.
+
+        Returns
+        -------
+        bool
+            True if the active automation was finished, otherwise False.
         """
 
     @abstractmethod
